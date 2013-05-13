@@ -1,0 +1,81 @@
+CREATE procedure [dbo].[SSC_FindExactStringInDatabase]
+(
+@target varchar(128), -- string to find
+@schema varchar(128) = '%', -- percent for all schemas
+@table varchar(128) = '%', -- percent for all tables
+@column varchar(128) = '%', -- percent for all columns
+@timelimitseconds bigint = 43200 -- the procedure should stop after this many seconds have elapsed. 43200 seconds is 12 hours.
+)
+
+as
+
+begin
+
+-- Database name
+declare @dbname varchar(128);
+-- Schema name
+declare @schemaname varchar(128);
+-- Table name
+declare @tablename varchar(128);
+-- Column name
+declare @columnname varchar(128);
+-- SQL statement to be executed
+declare @stmt nvarchar(1024);
+-- Count of hits
+declare @kount bigint;
+-- Loop counter, char(@loopcount) is the particular unprintable character being checked/fixed
+declare @loopcount integer;
+-- Table for the hits
+declare @Hits table (dbname varchar(128), schemaname varchar(128), tablename varchar(128), columnname varchar(128), kount bigint);
+-- Timer
+declare @starttime datetime;
+set @starttime = current_timestamp;
+
+-- Loop through all columns in all tables in all schemas in the specified database
+declare colcurs cursor for
+select
+db_name() as dbname,
+h.name as schemaname,
+t.name as tablename,
+c.name as columnname
+
+from sys.tables t join sys.columns c on t.object_id=c.object_id
+join sys.types y on c.system_type_id=y.system_type_id
+join sys.schemas h on t.schema_id=h.schema_id
+where t.type='U'
+and h.name like @schema
+and t.name like @table
+and c.name like @column
+and y.name in ('char','varchar')
+order by dbname, schemaname, tablename, columnname;
+
+open colcurs;
+
+fetch next from colcurs into @dbname, @schemaname, @tablename, @columnname;
+
+while (@@fetch_status = 0) and (datediff(second, @starttime, current_timestamp) < @timelimitseconds)
+begin
+
+set @stmt =
+'select @kountOut=count(*) from [' +
+rtrim(@dbname) + '].[' + rtrim(@schemaname) + '].[' + rtrim(@tablename) +
+'] where [' + rtrim(@columnname) +'] = ''' + @target + ''';';
+
+execute sp_executesql @stmt, N'@kountOut bigint output', @kountOut=@kount output;
+
+-- Remember the non-zero counts
+insert into @Hits
+select @dbname, @schemaname, @tablename, @columnname, @kount
+where @kount>0;
+
+-- end of loop through columns
+fetch next from colcurs into @dbname, @schemaname, @tablename, @columnname;
+end;
+
+close colcurs;
+deallocate colcurs;
+
+-- Finish by returning the counts in the result set
+select * from @Hits;
+
+end;
